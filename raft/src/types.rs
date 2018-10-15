@@ -13,14 +13,8 @@ impl Term {
         self.0 += 1;
     }
 
-    pub fn advance_to(&mut self, target: &Term) -> () {
-        if target < self {
-            let msg = format!(
-                "Cannot advance term to a value below the current one! current: {}, target: {}",
-                self.0, target.0
-            );
-            panic!(msg);
-        } else {
+    pub fn update(&mut self, target: &Term) -> () {
+        if target > self {
             self.0 = target.0;
         }
     }

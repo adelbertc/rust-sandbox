@@ -1,4 +1,4 @@
-use rpc::{Message, RequestVote};
+use rpc::{Message, Request, Response, Rpc};
 use std::time::{Duration, SystemTime};
 use types::{ServerId, Term};
 
@@ -15,15 +15,15 @@ pub struct Server {
     server_id: ServerId,
     current_term: Term,
     voted_for: Option<ServerId>,
-    cluster: Vec<Sender<Message>>,
-    receive_rpc: Receiver<Message>,
+    cluster: Vec<Sender<Rpc<Request, Response>>>,
+    receive_rpc: Receiver<Rpc<Request, Response>>,
 }
 
 impl Server {
     pub fn new(
         server_id: ServerId,
-        cluster: Vec<Sender<Message>>,
-        receive_rpc: Receiver<Message>,
+        cluster: Vec<Sender<Rpc<Request, Response>>>,
+        receive_rpc: Receiver<Rpc<Request, Response>>,
     ) -> Server {
         Server {
             state: ServerState::Follower,
@@ -40,43 +40,51 @@ impl Server {
 
         let mut received = false;
         let mut last_received = SystemTime::now();
+
         loop {
             if let Ok(message) = self.receive_rpc.try_recv() {
                 received = true;
                 last_received = SystemTime::now();
-                let Message { sender, message } = message;
-                match message {
-                    RequestVote::Request {
-                        term,
+                let Rpc {
+                    sender,
+                    message: Message { term, payload },
+                } = message;
+
+                match payload {
+                    Request::RequestVote {
                         candidate_id,
                         last_log_index: _,
                         last_log_term: _,
-                    } => if term < self.current_term {
-                        let response = RequestVote::Response {
-                            term: self.current_term,
-                            vote_granted: false,
-                        };
-                        sender.send(response).unwrap_or(());
-                    } else if (self.voted_for.is_none() || self.voted_for == Some(candidate_id))
-                        && true
-                    /* TODO */
-                    {
-                        let response = RequestVote::Response {
-                            term: self.current_term,
-                            vote_granted: true,
-                        };
-                        sender.send(response).unwrap_or(());
-                    } else {
-                        let response = RequestVote::Response {
-                            term: self.current_term,
-                            vote_granted: false,
-                        };
-                        sender.send(response).unwrap_or(());
-                    },
-                    RequestVote::Response {
-                        term: _,
-                        vote_granted: _,
-                    } => (),
+                    } => {
+                        self.current_term.update(&term);
+
+                        if term < self.current_term {
+                            let response = Message {
+                                term: self.current_term,
+                                payload: Response::reject_vote(),
+                            };
+
+                            sender.send(response).unwrap_or(());
+                        } else if (self.voted_for.is_none() || self.voted_for == Some(candidate_id))
+                            && true
+                        /* TODO */
+                        {
+                            let response = Message {
+                                term: self.current_term,
+                                payload: Response::grant_vote(),
+                            };
+
+                            sender.send(response).unwrap_or(());
+                        } else {
+                            let response = Message {
+                                term: self.current_term,
+                                payload: Response::reject_vote(),
+                            };
+
+                            sender.send(response).unwrap_or(());
+                        }
+                    }
+                    _ => (),
                 }
             }
 
@@ -92,19 +100,21 @@ impl Server {
 
         let mut responses = Vec::new();
 
-        let message = RequestVote::Request {
+        let message = Message {
             term: self.current_term,
-            candidate_id: self.server_id,
-            // TODO
-            last_log_index: 0,
-            last_log_term: Term::new(),
+            payload: Request::RequestVote {
+                candidate_id: self.server_id,
+                // TODO
+                last_log_index: 0,
+                last_log_term: Term::new(),
+            },
         };
 
         for server in self.cluster.iter() {
             let (sender, receiver) = channel();
             responses.push(receiver);
 
-            let message = Message {
+            let message = Rpc {
                 sender,
                 message: message.clone(),
             };
